@@ -28,7 +28,7 @@ BUCKET = config["BUCKET"]
 
 vertexai.init(project=PROJECT, location=LOCATION)
 
-MODEL_NAME = "text-bison@001"
+MODEL_NAME = "text-bison@002"
 TEMPERATURE = 0.2
 MAX_OUTPUT_TOKENS = 256
 TOP_P = 0.8
@@ -306,7 +306,7 @@ if st.session_state.showTwo:
             st.divider()
             time.sleep(SLEEP_TIMEOUT)
     else:
-        paragraphs.append(chunks[0])
+        paragraphs.append(chunks[0][0])
 
     response = summarize_policy("\n\n".join(paragraphs), question)
     st.write(response)
