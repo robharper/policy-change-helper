@@ -54,7 +54,7 @@ if AUTH_ENABLED:
            
 vertexai.init(project=PROJECT, location=LOCATION)
 
-TEMPERATURE = 0.2
+TEMPERATURE = 0.0
 MAX_OUTPUT_TOKENS = 8192
 TOP_P = 0.8
 TOP_K = 40
@@ -73,6 +73,7 @@ PROPOSED CHANGE:
 NEEDED CHANGES:
 """
 
+# Only used when the selected document is larger than the context window and must be chunked
 EXTRACT_PROMPT = """You are an intelligent policy analyst helping on determine what are the NEEDED CHANGES to be made to an EXISTING POLICY in order to implement the PROPOSED CHANGE on an an EXISTING POLICY.
 Please summarize the relevant portions of the EXISTING POLICY when explaining the NEEDED CHANGES.
 Strictly Use ONLY the following pieces of context to determine the NEEDED CHANGES for the PROPOSED CHANGE.
@@ -156,7 +157,6 @@ def get_file_content(link):
     chunk = ""
     token_size = (TOTAL_TOKENS - st.session_state.max_output_tokens) * 4
     for page in reader.pages:
-
         # if length of chunk is greater than 15000 characters, then add it to the list
         if len(chunk) > token_size:
             chunks.append([chunk,range])
@@ -167,11 +167,8 @@ def get_file_content(link):
         range.append(p)
         p += 1
 
-
     chunks.append(chunk)
-
     return chunks
-
 
 
 def search_sample(
@@ -257,6 +254,44 @@ def response_to_df(response):
 
     return [df,meta]
 
+
+@st.cache_data
+def execute_search(
+    project_id,
+    location,
+    data_store_id,
+    search_query
+):
+    response = search_sample(project_id, location, data_store_id, search_query)
+    return response_to_df(response)
+
+@st.cache_data
+def get_content(
+    link
+):
+    chunks = []
+    paragraphs = []
+
+    chunks = get_file_content(link)
+    SLEEP_TIMEOUT = 5
+    if len(chunks) > 1:
+        chunk_count = 1
+        for chunk in chunks:
+            with st.spinner(f"Analyzing chunk #{chunk_count}"):
+                chunk_count += 1
+                text = chunk[0]
+                paragraph = extract_text(text, question)
+                paragraphs.append(paragraph)
+                st.write( "Pages: {first} - {last}".format(first=str(chunk[1][0]), last=str(chunk[1][-1])) )
+                st.write(paragraph)
+                st.divider()
+            time.sleep(SLEEP_TIMEOUT)
+    else:
+        paragraphs.append(chunks[0])
+    
+    return "\n\n".join(paragraphs)
+
+
 if "showOne" not in st.session_state:
     st.session_state.showOne = False
 if "showTwo" not in st.session_state:
@@ -273,8 +308,9 @@ if question:
         st.session_state.showOne = True
 
 
-def analyze_this(link):
+def analyze_this(link, title):
     st.session_state.link = link
+    st.session_state.title = title
     st.session_state.showOne = False
     st.session_state.showTwo = True
 
@@ -285,11 +321,8 @@ def back_to_results():
 with st.sidebar:
     st.markdown("# Settings")
     
-    summarize_prompt = st.text_area("Summarize Prompt", value=SUMMARIZE_PROMPT)
+    summarize_prompt = st.text_area("Prompt", value=SUMMARIZE_PROMPT)
     st.session_state.summarize_prompt = summarize_prompt
-
-    extract_prompt = st.text_area("Extract Prompt", value=EXTRACT_PROMPT)
-    st.session_state.extract_prompt = extract_prompt
 
     temperature = st.slider(
         "Temperature:",
@@ -313,57 +346,27 @@ with st.sidebar:
 
 if st.session_state.showOne:
 
-    response2 = search_sample(PROJECT, "global", DATASTORE, question)
-    [df, meta] = response_to_df(response2)
+    [df, meta] = execute_search(PROJECT, "global", DATASTORE, question)
 
-    with st.expander("See results", expanded=False):
-        st.dataframe(df)
+    st.markdown(f"## Results")
 
     for row in df.itertuples():
-        st.markdown(f"# {row.Title}")
+        st.markdown(f"### {row.Title}")
         st.markdown(row.Snippet, unsafe_allow_html=True)
-        st.button("Analyze this", key=row.Id, on_click=analyze_this, args=(row.Link,))
+        st.button("Analyze", key=row.Id, on_click=analyze_this, args=(row.Link, row.Title,))
         st.divider()
         
 if st.session_state.showTwo:
 
     st.button( "Back", on_click=back_to_results )
 
-    chunks = []
-    with st.spinner("Loading document..."):
-        st.markdown(f"# {st.session_state.link}")
+    st.markdown(f"## {st.session_state.title}")
+    st.divider()
 
-        chunks = get_file_content(st.session_state.link)
-
-        st.write(f"Doc: {st.session_state.link}")
-        st.write(f"Chunks: {len(chunks)}")
-
-        SLEEP_TIMEOUT = 5
-    
-    paragraphs = []
-
-    breakdown, summary = st.tabs(["Page Breakdown", "Summary"])
-
-    if len(chunks) > 1:
-        chunk_count = 1
-        with breakdown:
-            for chunk in chunks:
-                with st.spinner(f"Analyzing chunk #{chunk_count}"):
-                    chunk_count += 1
-                    text = chunk[0]
-                    paragraph = extract_text(text, question)
-                    paragraphs.append(paragraph)
-                    st.write( "Pages: {first} - {last}".format(first=str(chunk[1][0]), last=str(chunk[1][-1])) )
-                    st.write(paragraph)
-                    st.divider()
-                time.sleep(SLEEP_TIMEOUT)
-    else:
-        paragraphs.append(chunks[0])
-        with breakdown:
-            with st.spinner("Analyzing..."):
-                st.write("Summary is ready")
-    
-    with summary:
-        with st.spinner("Analyzing..."):
-            response = summarize_policy("\n\n".join(paragraphs), question)
-            st.write(response)
+    text = ""
+    with st.spinner("Fetching..."):
+        text = get_content(st.session_state.link)
+        
+    with st.spinner("Analyzing..."):
+        response = summarize_policy(text, question)
+        st.write(response)
